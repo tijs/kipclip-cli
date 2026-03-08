@@ -21,8 +21,3 @@ pub fn auth_store_path() -> String {
 pub fn session_info_path() -> PathBuf {
     config_dir().join("whoami.json")
 }
-
-/// Appview base URL
-pub fn appview_url() -> String {
-    std::env::var("KIPCLIP_APPVIEW_URL").unwrap_or_else(|_| "https://kipclip.com".to_string())
-}

@@ -2124,6 +2124,7 @@ dependencies = [
  "miette",
  "open",
  "owo-colors",
+ "regex-lite",
  "reqwest",
  "serde",
  "serde_json",
