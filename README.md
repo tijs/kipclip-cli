@@ -57,7 +57,7 @@ Bookmark refs are short rkey prefixes (min 4 chars) shown next to each bookmark 
 
 ## How it works
 
-kip authenticates via AT Protocol OAuth (PKCE + DPoP) using the [jacquard](https://crates.io/crates/jacquard) Rust SDK. Bookmarks are read from and written to your PDS directly. URL metadata (title, description, favicon) is fetched from the kipclip.com enrichment endpoint.
+kip authenticates via AT Protocol OAuth (PKCE + DPoP) using the [jacquard](https://crates.io/crates/jacquard) Rust SDK. Bookmarks are read from and written to your PDS directly. URL metadata (title, description, favicon, image) is extracted client-side by fetching and parsing the bookmarked page.
 
 AT Protocol collections used:
 - `community.lexicon.bookmarks.bookmark` — bookmark records
