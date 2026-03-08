@@ -1,8 +1,10 @@
 # kip
 
-Command-line interface for [kipclip.com](https://kipclip.com) — an AT Protocol bookmark manager.
+Command-line tool for managing your AT Protocol bookmarks. Works with [kipclip.com](https://kipclip.com) and any app that uses the same record format.
 
 Read, add, tag, and manage your bookmarks from the terminal. Bookmarks are stored on your personal PDS using AT Protocol, so they stay yours.
+
+kip talks directly to your PDS — it doesn't go through kipclip.com or any other server. The website and CLI read and write the same data, but neither depends on the other. You can use kip without ever visiting the website, and your bookmarks will still show up there if you do.
 
 ## Install
 
@@ -57,12 +59,19 @@ Bookmark refs are short rkey prefixes (min 4 chars) shown next to each bookmark 
 
 ## How it works
 
-kip authenticates via AT Protocol OAuth (PKCE + DPoP) using the [jacquard](https://crates.io/crates/jacquard) Rust SDK. Bookmarks are read from and written to your PDS directly. URL metadata (title, description, favicon, image) is extracted client-side by fetching and parsing the bookmarked page.
+On [AT Protocol](https://atproto.com), your data lives in your Personal Data Server (PDS) — a repository of records that you own. Apps don't store your data in their own databases; they read and write records in your PDS. This means any app that understands the same record format can work with the same data.
 
-AT Protocol collections used:
-- `community.lexicon.bookmarks.bookmark` — bookmark records
-- `com.kipclip.annotation` — enrichment + notes sidecar
-- `com.kipclip.tag` — tag records
+kip authenticates via AT Protocol OAuth (PKCE + DPoP) using the [jacquard](https://crates.io/crates/jacquard) Rust SDK, then talks to your PDS directly. URL metadata (title, description, favicon, image) is extracted client-side by fetching and parsing the bookmarked page — no server involved.
+
+### Records
+
+Your bookmarks are stored as records in these AT Protocol collections:
+
+- **`community.lexicon.bookmarks.bookmark`** — the bookmark itself (URL, creation date, tags). This is a shared lexicon, so other AT Protocol apps can read your bookmarks too.
+- **`com.kipclip.annotation`** — enrichment sidecar (page title, description, favicon, image, notes). Shares the same rkey as its bookmark so they stay paired.
+- **`com.kipclip.tag`** — tag records for organizing bookmarks.
+
+Because these are just records in your PDS, you can inspect them with any AT Protocol tool, export them, or build your own app on top of them.
 
 ## License
 
