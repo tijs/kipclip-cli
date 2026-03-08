@@ -114,11 +114,7 @@ enum Commands {
 async fn make_pds_client() -> Result<PdsClient> {
     let session = auth::restore_session().await?;
     let info = auth::get_session_info()?;
-
-    Ok(PdsClient {
-        session,
-        did: info.did,
-    })
+    PdsClient::new(session, &info.did)
 }
 
 #[tokio::main]

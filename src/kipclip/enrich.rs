@@ -2,22 +2,21 @@ use miette::{IntoDiagnostic, Result, miette};
 use reqwest::header;
 
 use crate::kipclip::types::UrlMetadata;
+use crate::kipclip::url::validate_http_url;
 
 const MAX_TITLE_LENGTH: usize = 200;
 const MAX_DESCRIPTION_LENGTH: usize = 500;
 const MAX_URL_LENGTH: usize = 2000;
+const MAX_BODY_BYTES: usize = 512 * 1024; // 512KB — enough for <head>
 const TIMEOUT_SECS: u64 = 10;
 
 /// Fetch a URL and extract metadata (title, description, favicon, og:image)
 pub async fn enrich_url(url: &str) -> Result<UrlMetadata> {
-    let parsed = reqwest::Url::parse(url).map_err(|e| miette!("Invalid URL: {e}"))?;
-
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(miette!("Only HTTP(S) URLs are supported"));
-    }
+    let parsed = validate_http_url(url)?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .into_diagnostic()?;
 
@@ -57,7 +56,17 @@ pub async fn enrich_url(url: &str) -> Result<UrlMetadata> {
         });
     }
 
-    let html = resp.text().await.into_diagnostic()?;
+    // Read response body with size limit to prevent memory exhaustion.
+    // Check Content-Length header first for early rejection, then cap the read.
+    let content_length = resp.content_length().unwrap_or(0);
+    let read_limit = if content_length > 0 {
+        (content_length as usize).min(MAX_BODY_BYTES)
+    } else {
+        MAX_BODY_BYTES
+    };
+    let bytes = resp.bytes().await.into_diagnostic()?;
+    let capped = &bytes[..bytes.len().min(read_limit)];
+    let html = String::from_utf8_lossy(capped);
     Ok(parse_html_metadata(&html, &parsed))
 }
 
@@ -156,9 +165,8 @@ fn parse_html_metadata(html: &str, url: &reqwest::Url) -> UrlMetadata {
 /// Extract content from <meta> tag matching attr_name=attr_value
 fn extract_meta_content(html: &str, attr_name: &str, attr_value: &str) -> Option<String> {
     // Try: <meta attr="value" content="...">
-    let pattern1 = format!(
-        r#"(?i)<meta[^>]+{attr_name}=["']{attr_value}["'][^>]+content=["']([^"']+)["']"#
-    );
+    let pattern1 =
+        format!(r#"(?i)<meta[^>]+{attr_name}=["']{attr_value}["'][^>]+content=["']([^"']+)["']"#);
     if let Some(caps) = regex_lite::Regex::new(&pattern1)
         .ok()
         .and_then(|re| re.captures(html))
@@ -167,9 +175,8 @@ fn extract_meta_content(html: &str, attr_name: &str, attr_value: &str) -> Option
     }
 
     // Try: <meta content="..." attr="value">
-    let pattern2 = format!(
-        r#"(?i)<meta[^>]+content=["']([^"']+)["'][^>]+{attr_name}=["']{attr_value}["']"#
-    );
+    let pattern2 =
+        format!(r#"(?i)<meta[^>]+content=["']([^"']+)["'][^>]+{attr_name}=["']{attr_value}["']"#);
     if let Some(caps) = regex_lite::Regex::new(&pattern2)
         .ok()
         .and_then(|re| re.captures(html))
@@ -178,4 +185,154 @@ fn extract_meta_content(html: &str, attr_name: &str, attr_value: &str) -> Option
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_title_from_html() {
+        let html = "<html><head><title>Hello World</title></head></html>";
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(meta.title.as_deref(), Some("Hello World"));
+    }
+
+    #[test]
+    fn parse_og_title_fallback() {
+        let html = r#"<html><head><meta property="og:title" content="OG Title"></head></html>"#;
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(meta.title.as_deref(), Some("OG Title"));
+    }
+
+    #[test]
+    fn title_tag_takes_precedence_over_og() {
+        let html = r#"<html><head>
+            <title>Page Title</title>
+            <meta property="og:title" content="OG Title">
+        </head></html>"#;
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(meta.title.as_deref(), Some("Page Title"));
+    }
+
+    #[test]
+    fn parse_description() {
+        let html = r#"<html><head><meta name="description" content="A great page"></head></html>"#;
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(meta.description.as_deref(), Some("A great page"));
+    }
+
+    #[test]
+    fn parse_og_description_fallback() {
+        let html =
+            r#"<html><head><meta property="og:description" content="OG desc"></head></html>"#;
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(meta.description.as_deref(), Some("OG desc"));
+    }
+
+    #[test]
+    fn parse_favicon_link() {
+        let html = r#"<html><head><link rel="icon" href="/favicon.png"></head></html>"#;
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(
+            meta.favicon.as_deref(),
+            Some("https://example.com/favicon.png")
+        );
+    }
+
+    #[test]
+    fn default_favicon_when_no_link() {
+        let html = "<html><head><title>Test</title></head></html>";
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(
+            meta.favicon.as_deref(),
+            Some("https://example.com/favicon.ico")
+        );
+    }
+
+    #[test]
+    fn parse_og_image() {
+        let html = r#"<html><head><meta property="og:image" content="https://img.example.com/pic.jpg"></head></html>"#;
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(
+            meta.image.as_deref(),
+            Some("https://img.example.com/pic.jpg")
+        );
+    }
+
+    #[test]
+    fn parse_twitter_image_fallback() {
+        let html = r#"<html><head><meta name="twitter:image" content="https://img.example.com/tw.jpg"></head></html>"#;
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(
+            meta.image.as_deref(),
+            Some("https://img.example.com/tw.jpg")
+        );
+    }
+
+    #[test]
+    fn resolve_relative_og_image() {
+        let html =
+            r#"<html><head><meta property="og:image" content="/images/pic.jpg"></head></html>"#;
+        let url = reqwest::Url::parse("https://example.com/page").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(
+            meta.image.as_deref(),
+            Some("https://example.com/images/pic.jpg")
+        );
+    }
+
+    #[test]
+    fn hostname_fallback_title() {
+        let html = "<html><head></head></html>";
+        let url = reqwest::Url::parse("https://example.com").unwrap();
+        let meta = parse_html_metadata(html, &url);
+        assert_eq!(meta.title.as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn sanitize_text_collapses_whitespace() {
+        assert_eq!(sanitize_text("  hello   world  ", 100), "hello world");
+    }
+
+    #[test]
+    fn sanitize_text_truncates() {
+        assert_eq!(sanitize_text("hello world", 5), "hello");
+    }
+
+    #[test]
+    fn sanitize_text_strips_control_chars() {
+        assert_eq!(sanitize_text("hello\x00world", 100), "helloworld");
+    }
+
+    #[test]
+    fn resolve_url_rejects_non_http() {
+        let base = reqwest::Url::parse("https://example.com").unwrap();
+        assert!(resolve_url("javascript:alert(1)", &base).is_none());
+    }
+
+    #[test]
+    fn resolve_url_resolves_relative() {
+        let base = reqwest::Url::parse("https://example.com/page").unwrap();
+        assert_eq!(
+            resolve_url("/img.png", &base).as_deref(),
+            Some("https://example.com/img.png")
+        );
+    }
+
+    #[test]
+    fn resolve_url_rejects_too_long() {
+        let base = reqwest::Url::parse("https://example.com").unwrap();
+        let long_path = "/".to_string() + &"a".repeat(MAX_URL_LENGTH);
+        assert!(resolve_url(&long_path, &base).is_none());
+    }
 }

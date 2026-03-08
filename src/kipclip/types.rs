@@ -59,6 +59,13 @@ pub struct EnrichedBookmark {
     pub note: Option<String>,
 }
 
+impl EnrichedBookmark {
+    /// Title for display, falling back to the bookmark URL
+    pub fn display_title(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.subject)
+    }
+}
+
 /// A PDS record as returned by listRecords
 #[derive(Debug, Clone)]
 pub struct PdsRecord {

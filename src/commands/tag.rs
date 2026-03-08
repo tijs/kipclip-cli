@@ -5,7 +5,7 @@ use crate::kipclip::refs;
 use crate::kipclip::types::*;
 
 pub async fn run(pds: &PdsClient, reference: &str, new_tags: &[String]) -> Result<()> {
-    let bookmarks = pds.fetch_enriched_bookmarks(None).await?;
+    let bookmarks = pds.fetch_bookmarks_only(None).await?;
     let bookmark = refs::resolve_ref(reference, &bookmarks)?;
 
     // Merge existing + new tags (deduplicate, case-insensitive)
@@ -25,8 +25,7 @@ pub async fn run(pds: &PdsClient, reference: &str, new_tags: &[String]) -> Resul
     pds.put_record(BOOKMARK_COLLECTION, &bookmark.rkey, value)
         .await?;
 
-    let title = bookmark.title.as_deref().unwrap_or(&bookmark.subject);
-    println!("Updated tags on: {title}");
+    println!("Updated tags on: {}", bookmark.display_title());
     println!("Tags: {}", tags.join(", "));
     Ok(())
 }

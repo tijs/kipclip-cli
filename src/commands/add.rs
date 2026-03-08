@@ -3,10 +3,13 @@ use miette::{Result, miette};
 use crate::kipclip::enrich;
 use crate::kipclip::pds::PdsClient;
 use crate::kipclip::types::*;
+use crate::kipclip::url::validate_http_url;
 
 pub async fn run(pds: &PdsClient, url: &str, tags: &[String]) -> Result<()> {
-    // Check for duplicates
-    let existing = pds.fetch_enriched_bookmarks(None).await?;
+    validate_http_url(url)?;
+
+    // Check for duplicates (only need bookmark subjects, skip annotation fetch)
+    let existing = pds.fetch_bookmarks_only(None).await?;
     if existing.iter().any(|b| b.subject == url) {
         return Err(miette!("Bookmark already exists for {url}"));
     }

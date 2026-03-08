@@ -43,11 +43,8 @@ pub fn print_bookmarks(bookmarks: &[EnrichedBookmark]) {
     let url_width = remaining / 3;
 
     for bookmark in bookmarks {
-        let ref_str = &bookmark.rkey[..bookmark.rkey.len().min(ref_width)];
-        let title = bookmark
-            .title
-            .as_deref()
-            .unwrap_or(&bookmark.subject);
+        let ref_str: String = bookmark.rkey.chars().take(ref_width).collect();
+        let title = bookmark.title.as_deref().unwrap_or(&bookmark.subject);
         let url = &bookmark.subject;
         let tags = if bookmark.tags.is_empty() {
             String::new()
@@ -57,7 +54,7 @@ pub fn print_bookmarks(bookmarks: &[EnrichedBookmark]) {
 
         println!(
             "{}  {}  {}  {}",
-            truncate(ref_str, ref_width).dimmed(),
+            truncate(&ref_str, ref_width).dimmed(),
             truncate(title, title_width).bold(),
             truncate(url, url_width).blue(),
             truncate(&tags, tags_width).green(),
@@ -82,4 +79,38 @@ pub fn print_bookmark_detail(bookmark: &EnrichedBookmark) {
         println!("{} {}", "Note:".dimmed(), note);
     }
     println!("{} {}", "Created:".dimmed(), bookmark.created_at);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_exact_width_unchanged() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string_adds_ellipsis() {
+        let result = truncate("hello world", 6);
+        assert!(result.ends_with('…'));
+        assert!(result.len() <= 10); // unicode ellipsis is 3 bytes
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(truncate("", 10), "");
+    }
+
+    #[test]
+    fn truncate_wide_chars() {
+        // CJK characters are 2 columns wide
+        let result = truncate("日本語テスト", 6);
+        assert!(result.ends_with('…'));
+    }
 }

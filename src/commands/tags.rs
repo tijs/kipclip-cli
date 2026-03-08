@@ -4,13 +4,15 @@ use owo_colors::OwoColorize;
 use crate::kipclip::pds::PdsClient;
 
 pub async fn run(pds: &PdsClient, json: bool) -> Result<()> {
-    let bookmarks = pds.fetch_enriched_bookmarks(None).await?;
+    // Only need bookmark tags, skip annotation fetch
+    let bookmarks = pds.fetch_bookmarks_only(None).await?;
 
     // Count bookmarks per tag
-    let mut tag_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut tag_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     for bookmark in &bookmarks {
         for tag in &bookmark.tags {
-            *tag_counts.entry(tag.clone()).or_insert(0) += 1;
+            *tag_counts.entry(tag.clone()).or_default() += 1;
         }
     }
 
@@ -24,7 +26,10 @@ pub async fn run(pds: &PdsClient, json: bool) -> Result<()> {
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&tags).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&tags).unwrap_or_default()
+        );
     } else if tag_counts.is_empty() {
         println!("No tags found.");
     } else {

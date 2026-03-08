@@ -23,7 +23,6 @@ pub async fn run(pds: &PdsClient, reference: &str, force: bool) -> Result<()> {
     // Delete annotation sidecar (same rkey)
     let _ = pds.delete_record(ANNOTATION_COLLECTION, rkey).await;
 
-    let title = bookmark.title.as_deref().unwrap_or(&bookmark.subject);
-    println!("Deleted: {title}");
+    println!("Deleted: {}", bookmark.display_title());
     Ok(())
 }

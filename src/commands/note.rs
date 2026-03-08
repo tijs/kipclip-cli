@@ -5,14 +5,10 @@ use crate::kipclip::refs;
 use crate::kipclip::types::*;
 
 pub async fn run(pds: &PdsClient, reference: &str, text: Option<&str>) -> Result<()> {
-    let bookmarks = pds.fetch_enriched_bookmarks(None).await?;
+    let bookmarks = pds.fetch_bookmarks_only(None).await?;
     let bookmark = refs::resolve_ref(reference, &bookmarks)?;
     let rkey = bookmark.rkey.clone();
-    let title = bookmark
-        .title
-        .as_deref()
-        .unwrap_or(&bookmark.subject)
-        .to_string();
+    let title = bookmark.display_title().to_string();
 
     // Get or create annotation record
     match pds.get_record(ANNOTATION_COLLECTION, &rkey).await {
@@ -21,9 +17,9 @@ pub async fn run(pds: &PdsClient, reference: &str, text: Option<&str>) -> Result
             match text {
                 Some(t) => value["note"] = serde_json::Value::String(t.to_string()),
                 None => {
-                    value
-                        .as_object_mut()
-                        .map(|obj| obj.remove("note"));
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.remove("note");
+                    }
                 }
             }
             pds.put_record(ANNOTATION_COLLECTION, &rkey, value).await?;

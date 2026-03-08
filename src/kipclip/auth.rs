@@ -20,7 +20,7 @@ pub struct SessionInfo {
 
 /// Create an OAuth client with file-backed auth store
 fn oauth_client() -> OAuthClient<JacquardResolver, FileAuthStore> {
-    OAuthClient::with_default_config(FileAuthStore::new(&config::auth_store_path()))
+    OAuthClient::with_default_config(FileAuthStore::new(config::auth_store_path()))
 }
 
 /// Login via OAuth loopback flow — opens browser for authorization
@@ -43,10 +43,10 @@ pub async fn login(handle: &str) -> Result<SessionInfo> {
         session_id: sid_str,
     };
 
-    // Persist session info
+    // Persist session info with restrictive permissions (0600 atomically on Unix)
     let path = config::session_info_path();
     let json = serde_json::to_string_pretty(&info).into_diagnostic()?;
-    std::fs::write(&path, json).into_diagnostic()?;
+    config::write_private_file(&path, json.as_bytes())?;
 
     Ok(info)
 }
@@ -56,8 +56,8 @@ pub async fn restore_session() -> Result<Session> {
     let info = get_session_info()?;
     let oauth = oauth_client();
 
-    let did = jacquard::types::string::Did::new(&info.did)
-        .map_err(|e| miette!("Invalid DID: {e}"))?;
+    let did =
+        jacquard::types::string::Did::new(&info.did).map_err(|e| miette!("Invalid DID: {e}"))?;
 
     let session = oauth
         .restore(&did, &info.session_id)
