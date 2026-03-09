@@ -1,6 +1,6 @@
 [package]
 name = "kipclip"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "CLI for kipclip.com – AT Protocol bookmark manager"
 license = "MIT"
@@ -25,4 +25,5 @@ dirs = "6"
 unicode-width = "0.2"
 terminal_size = "0.4"
 jacquard-identity = "0.9"
+url = "2"
 regex-lite = "0.1"

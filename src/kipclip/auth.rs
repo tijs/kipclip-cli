@@ -1,14 +1,20 @@
 use jacquard::client::FileAuthStore;
+use jacquard::oauth::atproto::AtprotoClientMetadata;
 use jacquard::oauth::client::{OAuthClient, OAuthSession};
 use jacquard::oauth::loopback::LoopbackConfig;
+use jacquard::oauth::session::ClientData;
 use jacquard_identity::JacquardResolver;
 use miette::{IntoDiagnostic, Result, miette};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::kipclip::config;
 
 /// Concrete session type used throughout the CLI
 pub type Session = OAuthSession<JacquardResolver, FileAuthStore>;
+
+/// Default loopback port used by jacquard's LoopbackConfig::default()
+const LOOPBACK_PORT: u16 = 4000;
 
 /// Stored session info (persisted separately from OAuth tokens)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,9 +24,23 @@ pub struct SessionInfo {
     pub session_id: String,
 }
 
-/// Create an OAuth client with file-backed auth store
+/// Build client metadata matching what login_with_local_server uses.
+/// The client_id URL must include the same redirect_uri and scope params
+/// so that token refresh sends the correct client_id to the PDS.
+fn loopback_client_metadata() -> AtprotoClientMetadata<'static> {
+    let redirect = Url::parse(&format!("http://127.0.0.1:{LOOPBACK_PORT}/oauth/callback")).unwrap();
+    AtprotoClientMetadata::new_localhost(Some(vec![redirect]), None)
+}
+
+/// Create an OAuth client with file-backed auth store.
+/// Uses client metadata that matches the login flow so token refresh works.
 fn oauth_client() -> OAuthClient<JacquardResolver, FileAuthStore> {
-    OAuthClient::with_default_config(FileAuthStore::new(config::auth_store_path()))
+    let store = FileAuthStore::new(config::auth_store_path());
+    let client_data = ClientData {
+        keyset: None,
+        config: loopback_client_metadata(),
+    };
+    OAuthClient::new(store, client_data)
 }
 
 /// Login via OAuth loopback flow — opens browser for authorization
@@ -36,7 +56,6 @@ pub async fn login(handle: &str) -> Result<SessionInfo> {
     let did_str = did.to_string();
     let sid_str = session_id.to_string();
 
-    // Resolve handle via identity
     let info = SessionInfo {
         did: did_str,
         handle: handle.to_string(),

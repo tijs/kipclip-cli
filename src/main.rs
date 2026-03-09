@@ -112,8 +112,14 @@ enum Commands {
 
 /// Build a PDS client from the stored session
 async fn make_pds_client() -> Result<PdsClient> {
-    let session = auth::restore_session().await?;
     let info = auth::get_session_info()?;
+    let session = match auth::restore_session().await {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("Session expired. Run: kip login {}", info.handle);
+            std::process::exit(1);
+        }
+    };
     PdsClient::new(session, &info.did)
 }
 

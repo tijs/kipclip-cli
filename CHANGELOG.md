@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+### Fixed
+
+- Fix OAuth token refresh so sessions last up to 2 weeks instead of expiring after ~2 hours. The client_id used during token refresh now matches the one from login, allowing the PDS to accept refresh token requests.
+- Show a clear "Session expired" message with re-login instructions when session restore fails.
+
 ## 0.1.0
 
 First release of `kip`, the CLI for [kipclip.com](https://kipclip.com).
