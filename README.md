@@ -8,6 +8,14 @@ kip talks directly to your PDS — it doesn't go through kipclip.com or any othe
 
 ## Install
 
+### Homebrew (macOS)
+
+```sh
+brew install tijs/tap/kipclip
+```
+
+This installs the `kip` command.
+
 ### From source
 
 ```sh

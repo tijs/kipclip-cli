@@ -5,6 +5,7 @@ edition = "2024"
 description = "CLI for kipclip.com – AT Protocol bookmark manager"
 license = "MIT"
 repository = "https://github.com/tijs/kipclip-cli"
+homepage = "https://kipclip.com"
 
 [[bin]]
 name = "kip"
@@ -28,3 +29,8 @@ jacquard-identity = "0.9"
 url = "2"
 regex-lite = "0.1"
 rpassword = "7"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
