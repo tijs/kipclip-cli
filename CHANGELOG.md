@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2
+
+### Added
+
+- `kip login <handle> --headless` for SSH and remote machines: authorize in a local browser, then paste the hidden loopback callback URL into the CLI.
+
+### Fixed
+
+- Reject malformed empty OAuth callback parameters before they consume an authorization attempt.
+
 ## 0.1.1
 
 ### Fixed

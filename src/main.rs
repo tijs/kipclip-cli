@@ -17,10 +17,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Open browser for AT Protocol OAuth login
+    /// Log in with AT Protocol OAuth
     Login {
         /// Your AT Protocol handle (e.g. tijs.org)
         handle: String,
+        /// Print an authorization URL and paste its callback URL (for SSH/headless use)
+        #[arg(long)]
+        headless: bool,
     },
     /// Clear stored session
     Logout,
@@ -128,7 +131,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Login { handle } => commands::login::run(&handle).await,
+        Commands::Login { handle, headless } => commands::login::run(&handle, headless).await,
         Commands::Logout => commands::logout::run(),
         Commands::Whoami { json } => commands::whoami::run(json),
 

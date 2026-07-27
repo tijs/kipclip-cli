@@ -23,10 +23,20 @@ Download from [GitHub Releases](https://github.com/tijs/kipclip-cli/releases).
 ### Authentication
 
 ```sh
-kip login tijs.org       # Opens browser for AT Protocol OAuth
-kip whoami               # Show current user
-kip logout               # Clear session
+kip login tijs.org              # Opens browser for AT Protocol OAuth
+kip login tijs.org --headless   # SSH/headless login (paste callback URL)
+kip whoami                      # Show current user
+kip logout                      # Clear session
 ```
+
+### SSH and headless login
+
+Run `kip login <handle> --headless` on the remote machine, open the printed URL
+in a local browser, and approve access. The browser will then fail to load its
+`127.0.0.1:4000` callback; copy that complete URL from the address bar and paste
+it at kip's hidden terminal prompt. The short-lived authorization code is bound
+to the remote CLI's PKCE verifier and DPoP key, so no tunnel, password, or token
+transfer is needed.
 
 ### Bookmarks
 
