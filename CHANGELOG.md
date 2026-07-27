@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+### Fixed
+
+- Request the current AT Protocol OAuth `transition:generic` scope so write commands such as `kip add` can create PDS records.
+
 ## 0.1.2
 
 ### Added

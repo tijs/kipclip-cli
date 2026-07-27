@@ -3,6 +3,7 @@ use jacquard::client::FileAuthStore;
 use jacquard::oauth::atproto::AtprotoClientMetadata;
 use jacquard::oauth::client::{OAuthClient, OAuthSession};
 use jacquard::oauth::loopback::LoopbackConfig;
+use jacquard::oauth::scopes::Scope;
 use jacquard::oauth::session::ClientData;
 use jacquard::oauth::types::CallbackParams;
 use jacquard_identity::JacquardResolver;
@@ -17,6 +18,7 @@ pub type Session = OAuthSession<JacquardResolver, FileAuthStore>;
 
 /// Default loopback port used by jacquard's LoopbackConfig::default()
 const LOOPBACK_PORT: u16 = 4000;
+const OAUTH_SCOPE: &str = "atproto transition:generic";
 
 /// Stored session info (persisted separately from OAuth tokens)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +36,10 @@ fn loopback_client_metadata() -> AtprotoClientMetadata<'static> {
         Ok(url) => url,
         Err(_) => unreachable!("the fixed loopback callback URL is valid"),
     };
-    AtprotoClientMetadata::new_localhost(Some(vec![redirect]), None)
+    AtprotoClientMetadata::new_localhost(
+        Some(vec![redirect]),
+        Some(Scope::parse_multiple(OAUTH_SCOPE).expect("the fixed OAuth scope is valid")),
+    )
 }
 
 /// Create an OAuth client with file-backed auth store.
@@ -176,6 +181,13 @@ pub fn logout() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_metadata_requests_write_scope() {
+        let metadata = loopback_client_metadata();
+        let scopes: Vec<_> = metadata.scopes.iter().map(ToString::to_string).collect();
+        assert_eq!(scopes, ["atproto", "transition:generic"]);
+    }
 
     #[test]
     fn parses_loopback_callback_url() {
