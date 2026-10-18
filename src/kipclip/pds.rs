@@ -6,7 +6,7 @@ use jacquard::api::com_atproto::repo::{
 use jacquard::common::types::ident::AtIdentifier;
 use jacquard::common::types::recordkey::{RecordKey, Rkey};
 use jacquard::common::types::value::to_data;
-use jacquard::common::xrpc::XrpcClient;
+use jacquard::http_client::HttpClient;
 use miette::{Result, miette};
 use serde::Serialize;
 
@@ -14,16 +14,24 @@ use crate::kipclip::auth::Session;
 use crate::kipclip::refs::rkey_from_uri;
 use crate::kipclip::types::*;
 
+fn request_error(operation: &'static str) -> miette::Report {
+    // Both ClientError and XrpcError may embed raw upstream bodies/headers or
+    // transport URLs. Never attach them as diagnostic sources, even in Debug.
+    miette!(
+        "KIP_PDS_FAILED: PDS {operation} failed. Check the connection and saved authorization; retry an explicit kip login <handle> if necessary."
+    )
+}
+
 /// PDS client wrapping an authenticated jacquard session
-pub struct PdsClient {
-    session: Session,
+pub struct PdsClient<H = super::app_session::SessionHttp> {
+    session: Session<H>,
     did: jacquard::types::string::Did<'static>,
 }
 
-impl PdsClient {
-    pub fn new(session: Session, did: &str) -> Result<Self> {
+impl<H: HttpClient + Send + Sync + 'static> PdsClient<H> {
+    pub fn new(session: Session<H>, did: &str) -> Result<Self> {
         let did_owned = jacquard::types::string::Did::new_owned(did)
-            .map_err(|e| miette!("Invalid DID: {e}"))?;
+            .map_err(|_| miette!("KIP_RESTORE_FAILED: Invalid cached account DID."))?;
         Ok(Self {
             session,
             did: did_owned,
@@ -31,7 +39,8 @@ impl PdsClient {
     }
 
     fn parse_nsid(collection: &str) -> Result<jacquard::types::string::Nsid<'_>> {
-        jacquard::types::string::Nsid::new(collection).map_err(|e| miette!("Invalid NSID: {e}"))
+        jacquard::types::string::Nsid::new(collection)
+            .map_err(|_| miette!("Invalid collection NSID."))
     }
 
     /// List all records from a collection (handles pagination)
@@ -65,11 +74,11 @@ impl PdsClient {
                 .session
                 .send(request)
                 .await
-                .map_err(|e| miette!("PDS listRecords failed: {e}"))?;
+                .map_err(|_| request_error("listRecords"))?;
 
             let output = response
                 .into_output()
-                .map_err(|e| miette!("Failed to parse listRecords response: {e}"))?;
+                .map_err(|_| request_error("listRecords response"))?;
 
             for record in output.records {
                 let value_json =
@@ -106,7 +115,7 @@ impl PdsClient {
         record: &T,
     ) -> Result<CreateRecordResponse> {
         let nsid = Self::parse_nsid(collection)?;
-        let data = to_data(record).map_err(|e| miette!("Failed to serialize record: {e}"))?;
+        let data = to_data(record).map_err(|_| miette!("Failed to serialize record."))?;
 
         let mut builder = CreateRecord::new()
             .repo(AtIdentifier::Did(self.did.clone()))
@@ -114,7 +123,7 @@ impl PdsClient {
             .record(data);
 
         if let Some(rkey) = rkey {
-            let rk = Rkey::new(rkey).map_err(|e| miette!("Invalid rkey: {e}"))?;
+            let rk = Rkey::new(rkey).map_err(|_| miette!("Invalid record key."))?;
             builder = builder.rkey(RecordKey(rk));
         }
 
@@ -123,11 +132,11 @@ impl PdsClient {
             .session
             .send(request)
             .await
-            .map_err(|e| miette!("PDS createRecord failed: {e}"))?;
+            .map_err(|_| request_error("createRecord"))?;
 
         let output = response
             .into_output()
-            .map_err(|e| miette!("Failed to parse createRecord response: {e}"))?;
+            .map_err(|_| request_error("createRecord response"))?;
 
         Ok(CreateRecordResponse {
             uri: output.uri.to_string(),
@@ -149,11 +158,11 @@ impl PdsClient {
             .session
             .send(request)
             .await
-            .map_err(|e| miette!("PDS getRecord failed: {e}"))?;
+            .map_err(|_| request_error("getRecord"))?;
 
         let output = response
             .into_output()
-            .map_err(|e| miette!("Failed to parse getRecord response: {e}"))?;
+            .map_err(|_| request_error("getRecord response"))?;
 
         let value_json = serde_json::to_value(&output.value).unwrap_or(serde_json::Value::Null);
 
@@ -168,7 +177,7 @@ impl PdsClient {
         record: serde_json::Value,
     ) -> Result<()> {
         let nsid = Self::parse_nsid(collection)?;
-        let data = to_data(&record).map_err(|e| miette!("Failed to serialize record: {e}"))?;
+        let data = to_data(&record).map_err(|_| miette!("Failed to serialize record."))?;
 
         let rk = Rkey::new(rkey).map_err(|e| miette!("Invalid rkey: {e}"))?;
         let request = PutRecord::new()
@@ -182,11 +191,11 @@ impl PdsClient {
             .session
             .send(request)
             .await
-            .map_err(|e| miette!("PDS putRecord failed: {e}"))?;
+            .map_err(|_| request_error("putRecord"))?;
 
         response
             .into_output()
-            .map_err(|e| miette!("Failed to parse putRecord response: {e}"))?;
+            .map_err(|_| request_error("putRecord response"))?;
 
         Ok(())
     }
@@ -205,7 +214,9 @@ impl PdsClient {
         self.session
             .send(request)
             .await
-            .map_err(|e| miette!("PDS deleteRecord failed: {e}"))?;
+            .map_err(|_| request_error("deleteRecord"))?
+            .into_output()
+            .map_err(|_| request_error("deleteRecord response"))?;
 
         Ok(())
     }

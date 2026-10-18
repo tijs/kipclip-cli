@@ -1,73 +1,64 @@
-use miette::{IntoDiagnostic, Result, miette};
-use reqwest::header;
+use miette::{Result, miette};
 
+use crate::kipclip::fetch;
 use crate::kipclip::types::UrlMetadata;
 use crate::kipclip::url::validate_http_url;
 
 const MAX_TITLE_LENGTH: usize = 200;
 const MAX_DESCRIPTION_LENGTH: usize = 500;
 const MAX_URL_LENGTH: usize = 2000;
-const MAX_BODY_BYTES: usize = 512 * 1024; // 512KB — enough for <head>
-const TIMEOUT_SECS: u64 = 10;
 
-/// Fetch a URL and extract metadata (title, description, favicon, og:image)
+/// Fetch a URL and extract metadata (title, description, favicon, og:image).
+///
+/// Best-effort for `kip add`: HTTP error responses and non-HTML pages fall
+/// back to the hostname and default favicon. Transport, validation, and
+/// safety failures are returned as errors.
 pub async fn enrich_url(url: &str) -> Result<UrlMetadata> {
     let parsed = validate_http_url(url)?;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .into_diagnostic()?;
-
-    let resp = client
-        .get(url)
-        .header(
-            header::USER_AGENT,
-            "kipclip-bot/1.0 (Bookmark enrichment; +https://kipclip.com)",
-        )
-        .send()
-        .await
-        .map_err(|e| miette!("Failed to fetch URL: {e}"))?;
-
-    if !resp.status().is_success() {
-        let hostname = parsed.host_str().unwrap_or(url);
-        return Ok(UrlMetadata {
-            title: Some(hostname.to_string()),
-            description: None,
-            favicon: Some(default_favicon(&parsed)),
-            image: None,
-        });
+    let page = fetch::fetch_url(url).await?;
+    match page.html {
+        Some(html) => Ok(parse_html_metadata(&html, &page.final_url)),
+        None => Ok(hostname_fallback(&parsed)),
     }
+}
 
-    let content_type = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if !content_type.contains("text/html") {
-        let hostname = parsed.host_str().unwrap_or(url);
-        return Ok(UrlMetadata {
-            title: Some(hostname.to_string()),
-            description: None,
-            favicon: Some(default_favicon(&parsed)),
-            image: None,
-        });
+/// Fetch metadata for `url` for the read-only `kip metadata` command.
+///
+/// No fallback: an HTTP error status is an error, and a non-HTML response
+/// yields empty metadata. Never touches the session or the PDS.
+pub async fn fetch_metadata(url: &str) -> Result<UrlMetadata> {
+    let page = fetch::fetch_url(url).await?;
+    if !page.status.is_success() {
+        return Err(miette!("HTTP {} for {url}", page.status.as_u16()));
     }
+    match page.html {
+        Some(html) => Ok(parse_html_metadata(&html, &page.final_url)),
+        None => Ok(empty_metadata()),
+    }
+}
 
-    // Read response body with size limit to prevent memory exhaustion.
-    // Check Content-Length header first for early rejection, then cap the read.
-    let content_length = resp.content_length().unwrap_or(0);
-    let read_limit = if content_length > 0 {
-        (content_length as usize).min(MAX_BODY_BYTES)
-    } else {
-        MAX_BODY_BYTES
-    };
-    let bytes = resp.bytes().await.into_diagnostic()?;
-    let capped = &bytes[..bytes.len().min(read_limit)];
-    let html = String::from_utf8_lossy(capped);
-    Ok(parse_html_metadata(&html, &parsed))
+fn empty_metadata() -> UrlMetadata {
+    UrlMetadata {
+        title: None,
+        description: None,
+        favicon: None,
+        image: None,
+    }
+}
+
+/// Fallback for pages that cannot be fetched or parsed: the hostname as title
+/// and the site's default favicon path.
+fn hostname_fallback(url: &reqwest::Url) -> UrlMetadata {
+    UrlMetadata {
+        title: Some(
+            url.host_str()
+                .map(|h| h.to_string())
+                .unwrap_or_else(|| url.to_string()),
+        ),
+        description: None,
+        favicon: Some(default_favicon(url)),
+        image: None,
+    }
 }
 
 fn default_favicon(url: &reqwest::Url) -> String {
@@ -97,7 +88,7 @@ fn resolve_url(href: &str, base: &reqwest::Url) -> Option<String> {
     Some(s)
 }
 
-fn parse_html_metadata(html: &str, url: &reqwest::Url) -> UrlMetadata {
+pub(crate) fn parse_html_metadata(html: &str, url: &reqwest::Url) -> UrlMetadata {
     let mut metadata = UrlMetadata {
         title: None,
         description: None,
@@ -334,5 +325,38 @@ mod tests {
         let base = reqwest::Url::parse("https://example.com").unwrap();
         let long_path = "/".to_string() + &"a".repeat(MAX_URL_LENGTH);
         assert!(resolve_url(&long_path, &base).is_none());
+    }
+
+    #[test]
+    fn hostname_fallback_uses_host_and_default_favicon() {
+        let url = reqwest::Url::parse("https://example.com/page").unwrap();
+        let meta = hostname_fallback(&url);
+        assert_eq!(meta.title.as_deref(), Some("example.com"));
+        assert_eq!(
+            meta.favicon.as_deref(),
+            Some("https://example.com/favicon.ico")
+        );
+        assert!(meta.description.is_none());
+        assert!(meta.image.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_metadata_rejects_invalid_urls() {
+        for url in ["not a url", "ftp://example.com/x", "file:///etc/passwd"] {
+            assert!(fetch_metadata(url).await.is_err(), "{url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_metadata_refuses_local_and_private_targets() {
+        for url in [
+            "http://127.0.0.1:9/",
+            "http://localhost:9/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://192.168.1.1/",
+        ] {
+            let err = fetch_metadata(url).await.unwrap_err();
+            assert!(err.to_string().contains("Refusing"), "{url}: {err}");
+        }
     }
 }

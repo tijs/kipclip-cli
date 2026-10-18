@@ -35,9 +35,13 @@ pub struct AnnotationRecord {
 /// URL metadata from enrichment endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrlMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub favicon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
 }
 
