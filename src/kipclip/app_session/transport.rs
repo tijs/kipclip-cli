@@ -3,6 +3,7 @@
 //! regardless of Content-Length. Other app-session XRPC bodies allow 8 MiB.
 
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use jacquard::http_client::HttpClient;
@@ -54,7 +55,42 @@ struct PinnedRequest {
     request: http::Request<Vec<u8>>,
 }
 
+#[derive(PartialEq, Eq)]
+struct ConnectionKey {
+    origin: String,
+    addrs: Vec<SocketAddr>,
+}
+
+type ClientCache = Mutex<Vec<(ConnectionKey, Arc<reqwest::Client>)>>;
+static CLIENTS: OnceLock<ClientCache> = OnceLock::new();
+
 impl PinnedRequest {
+    fn pooled_client(&self) -> std::result::Result<Arc<reqwest::Client>, RequestFailure> {
+        // Preflight still runs for EVERY request before reaching this method.
+        // Share TLS connections only for the same origin and exact validated
+        // address set. A changed/forbidden DNS answer cannot use an old pool.
+        let mut addrs = self.addrs.clone();
+        addrs.sort_unstable();
+        addrs.dedup();
+        let key = ConnectionKey {
+            origin: self.url.origin().ascii_serialization(),
+            addrs,
+        };
+        let mut clients = CLIENTS
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .map_err(|_| RequestFailure)?;
+        if let Some((_, client)) = clients.iter().find(|(stored, _)| stored == &key) {
+            return Ok(client.clone());
+        }
+        let client = Arc::new(self.client_builder().build().map_err(|_| RequestFailure)?);
+        if clients.len() >= 8 {
+            clients.remove(0);
+        }
+        clients.push((key, client.clone()));
+        Ok(client)
+    }
+
     fn client_builder(&self) -> reqwest::ClientBuilder {
         let builder = private_client_builder();
         match self.url.host() {
@@ -66,8 +102,8 @@ impl PinnedRequest {
     }
 
     async fn send(self) -> std::result::Result<http::Response<Vec<u8>>, RequestFailure> {
-        let client = self.client_builder().build().map_err(|_| RequestFailure)?;
-        self.send_using(client).await
+        let client = self.pooled_client()?;
+        self.send_using((*client).clone()).await
     }
 
     async fn send_using(
@@ -216,7 +252,13 @@ where
     R: XrpcRequest + Sync,
     R::Response: Send + Sync,
 {
-    let request = build_http_request(pds, request, options).map_err(|_| RequestFailure)?;
+    let mut request = build_http_request(pds, request, options).map_err(|_| RequestFailure)?;
+    // The generated SDK unit request serializes as JSON null, but this
+    // procedure has no input. PDS servers reject any JSON body here.
+    if R::NSID == "com.atproto.server.refreshSession" {
+        request.body_mut().clear();
+        request.headers_mut().remove(http::header::CONTENT_TYPE);
+    }
     let response = http.send_http(request).await.map_err(|_| RequestFailure)?;
     // Also enforce the cap for injected/mock HttpClient implementations.
     if response.body().len() > xrpc_limit(R::NSID) {

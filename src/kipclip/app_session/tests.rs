@@ -28,6 +28,97 @@ const REFRESH: &str = "fixture.refresh.initial";
 const ACCESS_NEXT: &str = "fixture.access.rotated";
 const REFRESH_NEXT: &str = "fixture.refresh.rotated";
 
+#[tokio::test]
+async fn cached_save_verifies_exact_records_without_scanning_or_fetching_pages() {
+    use crate::kipclip::types::{ANNOTATION_COLLECTION, UrlMetadata};
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("whoami.json");
+    let http = MockHttp::default();
+    let info = login_fixture(&path, &http).await;
+    let client = pds(&info, &path, http.clone());
+    let uri = format!("at://{DID}/{BOOKMARK_COLLECTION}/fixturekey");
+    let annotation_uri = format!("at://{DID}/{ANNOTATION_COLLECTION}/fixturekey");
+    let cid = "bafyreiclbzdovdyoyzymb7t3getdeam3hgwqxszgth5ukj6o3tkoftthei";
+    http.reply(200, json!({"uri":uri,"cid":cid}));
+    http.reply(200, json!({"uri":annotation_uri,"cid":cid}));
+    http.reply(200, json!({"uri":uri,"cid":cid,"value":{"subject":"https://article.test/", "createdAt":"2026-10-24T00:00:00Z", "tags":["toread"]}}));
+    http.reply(200, json!({"uri":annotation_uri,"cid":cid,"value":{"subject":uri,"createdAt":"2026-10-24T00:00:00Z","title":"Cached title"}}));
+    let metadata = UrlMetadata {
+        title: Some("Cached title".into()),
+        description: None,
+        image: None,
+        favicon: None,
+    };
+    let saved = crate::commands::add::save_verified(
+        &client,
+        "https://article.test/",
+        &["toread".into()],
+        metadata,
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved.uri, uri);
+    assert_eq!(saved.tags, ["toread"]);
+    http.assert_calls(&[
+        ("POST", "com.atproto.server.createSession", None),
+        ("POST", "com.atproto.repo.createRecord", Some(ACCESS)),
+        ("POST", "com.atproto.repo.createRecord", Some(ACCESS)),
+        ("GET", "com.atproto.repo.getRecord", Some(ACCESS)),
+        ("GET", "com.atproto.repo.getRecord", Some(ACCESS)),
+    ]);
+    let requests = http.requests.lock().unwrap();
+    let annotation: Value = serde_json::from_slice(requests[2].body()).unwrap();
+    assert_eq!(annotation["record"]["title"], "Cached title");
+    for req in &requests[3..] {
+        assert!(req.uri().query().unwrap().contains("rkey=fixturekey"));
+    }
+}
+
+#[tokio::test]
+async fn cached_save_rejects_wrong_url_missing_tag_and_wrong_annotation() {
+    use crate::kipclip::types::{ANNOTATION_COLLECTION, UrlMetadata};
+    for failure in 0..4 {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("whoami.json");
+        let http = MockHttp::default();
+        let info = login_fixture(&path, &http).await;
+        let client = pds(&info, &path, http.clone());
+        let uri = format!("at://{DID}/{BOOKMARK_COLLECTION}/fixturekey");
+        let annotation_uri = format!("at://{DID}/{ANNOTATION_COLLECTION}/fixturekey");
+        let cid = "bafyreiclbzdovdyoyzymb7t3getdeam3hgwqxszgth5ukj6o3tkoftthei";
+        http.reply(200, json!({"uri":uri,"cid":cid}));
+        if failure == 3 {
+            http.reply(
+                500,
+                json!({"error":"InternalServerError","message":PRIVATE}),
+            );
+        } else {
+            http.reply(200, json!({"uri":annotation_uri,"cid":cid}));
+            http.reply(200, json!({"uri":uri,"cid":cid,"value":{"subject":if failure==0 {"https://wrong.test/"} else {"https://article.test/"}, "createdAt":"2026-10-24T00:00:00Z", "tags":if failure==1 {json!([])} else {json!(["toread"])}}}));
+            http.reply(200, json!({"uri":annotation_uri,"cid":cid,"value":{"subject":if failure==2 {"at://did:plc:other/com.kipclip.annotation/other"} else {&uri},"createdAt":"2026-10-24T00:00:00Z"}}));
+        }
+        let metadata = UrlMetadata {
+            title: None,
+            description: None,
+            image: None,
+            favicon: None,
+        };
+        let error = crate::commands::add::save_verified(
+            &client,
+            "https://article.test/",
+            &["toread".into()],
+            metadata,
+        )
+        .await
+        .unwrap_err();
+        assert_sanitized(&error);
+        assert_eq!(
+            http.requests.lock().unwrap().len(),
+            if failure == 3 { 3 } else { 5 }
+        );
+    }
+}
+
 type MockReply = std::io::Result<http::Response<Vec<u8>>>;
 
 #[derive(Default, Clone)]
@@ -579,6 +670,25 @@ async fn expired_access_refreshes_once_rotates_privately_and_restores_without_pa
                 .is_empty()
         );
         assert_minimal_store(&path);
+        // refreshSession has no input schema. Real PDS servers reject even
+        // JSON null, which the SDK serializes from its unit request type.
+        {
+            let requests = http.requests.lock().unwrap();
+            let refresh = requests
+                .iter()
+                .find(|request| {
+                    request
+                        .uri()
+                        .path()
+                        .ends_with("/com.atproto.server.refreshSession")
+                })
+                .unwrap();
+            assert!(
+                refresh.body().is_empty(),
+                "refreshSession must send no body"
+            );
+            assert!(refresh.headers().get("content-type").is_none());
+        }
         let saved = SavedAppSession::read(&path).unwrap();
         assert!(
             saved.access_jwt == ACCESS_NEXT && saved.refresh_jwt == REFRESH_NEXT,

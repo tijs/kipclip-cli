@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.5
+
+### Added
+
+- `kip bookmark-records` lists bookmarks without downloading annotations for live duplicate checks.
+- `kip save-verified <url> -t <tag> --duplicate-checked` accepts cached metadata JSON on stdin and verifies the exact bookmark and annotation records before returning structured JSON. Integrations can avoid repeated library scans and page fetches while retaining live duplicate checks and readback verification.
+
+### Fixed
+
+- Send an empty, untyped request body when refreshing app-password sessions. The SDK's JSON `null` body was rejected by PDS servers after access tokens expired.
+- Reuse HTTPS connections across paginated app-session requests while revalidating DNS on every request and restricting each connection pool to the exact approved origin and address set.
+
 ## 0.1.4
 
 ### Added

@@ -48,6 +48,17 @@ enum Commands {
         #[arg(short = 't', long = "tag")]
         tags: Vec<String>,
     },
+    /// List raw bookmark records as JSON, without annotation downloads
+    BookmarkRecords,
+    /// Save with metadata JSON on stdin and verify the two written records
+    SaveVerified {
+        url: String,
+        #[arg(short = 't', long = "tag")]
+        tags: Vec<String>,
+        /// Caller has already checked live bookmarks for canonical duplicates
+        #[arg(long, required = true)]
+        duplicate_checked: bool,
+    },
     /// List bookmarks (newest first)
     List {
         /// Filter by tag
@@ -151,6 +162,30 @@ async fn main() -> Result<()> {
         Commands::Add { url, tags } => {
             let pds = make_pds_client().await?;
             commands::add::run(&pds, &url, &tags).await
+        }
+        Commands::BookmarkRecords => {
+            let pds = make_pds_client().await?;
+            let bookmarks = pds.fetch_bookmarks_only(None).await?;
+            println!(
+                "{}",
+                serde_json::to_string(&bookmarks)
+                    .map_err(|_| miette::miette!("Could not encode bookmarks."))?
+            );
+            Ok(())
+        }
+        Commands::SaveVerified {
+            url,
+            tags,
+            duplicate_checked: _,
+        } => {
+            let metadata = commands::add::read_metadata(std::io::stdin().lock())?;
+            let pds = make_pds_client().await?;
+            let bookmark = commands::add::save_verified(&pds, &url, &tags, metadata).await?;
+            println!(
+                "{}",
+                serde_json::json!({"verified": true, "bookmark": bookmark})
+            );
+            Ok(())
         }
         Commands::List {
             tag,

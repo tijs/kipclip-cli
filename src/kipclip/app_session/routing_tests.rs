@@ -15,6 +15,35 @@ const REFRESH: &str = "fixture.refresh.token";
 const HOST: &str = "pds-routing.invalid";
 const METHODS: [&str; 2] = ["createSession", "refreshSession"];
 
+#[tokio::test]
+async fn connection_pool_reuses_only_identical_validated_origin_and_addresses() {
+    fn pinned(host: &str, addresses: &[&str]) -> PinnedRequest {
+        PinnedRequest {
+            url: Url::parse(&format!("https://{host}/xrpc/com.atproto.repo.listRecords")).unwrap(),
+            addrs: addresses.iter().map(|s| s.parse().unwrap()).collect(),
+            request: http::Request::get("https://fixture.test/")
+                .body(Vec::new())
+                .unwrap(),
+        }
+    }
+    // No request is dispatched: these clients contain no credentials.
+    let first = pinned("pool.fixture.test", &["1.1.1.1:443", "8.8.8.8:443"])
+        .pooled_client()
+        .unwrap();
+    let same = pinned("pool.fixture.test", &["8.8.8.8:443", "1.1.1.1:443"])
+        .pooled_client()
+        .unwrap();
+    assert!(Arc::ptr_eq(&first, &same));
+    let changed = pinned("pool.fixture.test", &["8.8.8.8:443"])
+        .pooled_client()
+        .unwrap();
+    assert!(!Arc::ptr_eq(&first, &changed));
+    let other_origin = pinned("other.fixture.test", &["1.1.1.1:443", "8.8.8.8:443"])
+        .pooled_client()
+        .unwrap();
+    assert!(!Arc::ptr_eq(&first, &other_origin));
+}
+
 fn credential_request(origin: &str, method: &str) -> http::Request<Vec<u8>> {
     let mut request = http::Request::post(format!("{origin}/xrpc/com.atproto.server.{method}"))
         .header("content-type", "application/json");

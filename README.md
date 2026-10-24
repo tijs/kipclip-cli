@@ -157,6 +157,17 @@ kip open <ref>           # Open URL in browser
 kip delete <ref> --force
 ```
 
+For integrations, `kip bookmark-records` outputs bookmark JSON without fetching
+annotations. After checking these live records for canonical URL duplicates,
+an integration can pipe cached metadata JSON to
+`kip save-verified <url> -t toread --duplicate-checked`. Metadata is limited to
+16 KiB with optional `title`, `description`, `favicon`, and `image` fields.
+This command does not fetch the article or scan bookmarks again. It writes both
+records, reads each one back by its exact key, and returns
+`{"verified":true,"bookmark":...}` only after checking the URL, tags, and annotation.
+On failure, check live duplicates again before retrying; a partial write may exist.
+Use ordinary `kip add` when the caller has not performed duplicate checking.
+
 ### Tags
 
 ```sh
