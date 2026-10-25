@@ -168,6 +168,12 @@ records, reads each one back by its exact key, and returns
 On failure, check live duplicates again before retrying; a partial write may exist.
 Use ordinary `kip add` when the caller has not performed duplicate checking.
 
+For recovery after an interrupted write, repeat `save-verified` with
+`--record-key <original-key>` and the same metadata input. It verifies the existing
+bookmark URL and required tags, completes a missing annotation at that same key,
+and reads the records back. It preserves existing annotation edits and notes,
+refuses changed bookmark URLs/tags, and never creates another bookmark.
+
 ### Tags
 
 ```sh

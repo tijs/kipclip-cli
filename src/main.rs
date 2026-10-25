@@ -58,6 +58,9 @@ enum Commands {
         /// Caller has already checked live bookmarks for canonical duplicates
         #[arg(long, required = true)]
         duplicate_checked: bool,
+        /// Resume an interrupted save at its original exact record key
+        #[arg(long)]
+        record_key: Option<String>,
     },
     /// List bookmarks (newest first)
     List {
@@ -177,10 +180,15 @@ async fn main() -> Result<()> {
             url,
             tags,
             duplicate_checked: _,
+            record_key,
         } => {
             let metadata = commands::add::read_metadata(std::io::stdin().lock())?;
             let pds = make_pds_client().await?;
-            let bookmark = commands::add::save_verified(&pds, &url, &tags, metadata).await?;
+            let bookmark = if let Some(key) = record_key {
+                commands::add::resume_verified(&pds, &url, &tags, metadata, &key).await?
+            } else {
+                commands::add::save_verified(&pds, &url, &tags, metadata).await?
+            };
             println!(
                 "{}",
                 serde_json::json!({"verified": true, "bookmark": bookmark})

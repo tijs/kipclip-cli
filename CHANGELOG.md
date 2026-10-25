@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+### Added
+
+- `kip save-verified --record-key <key>` resumes an interrupted save at its original bookmark. It verifies the URL and required tags, creates only a missing annotation, and verifies the completed records. Existing annotation edits and notes are preserved; unexpected PDS failures never trigger replacement writes.
+
 ## 0.1.5
 
 ### Added

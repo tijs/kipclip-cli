@@ -145,6 +145,21 @@ impl<H: HttpClient + Send + Sync + 'static> PdsClient<H> {
 
     /// Get a single record
     pub async fn get_record(&self, collection: &str, rkey: &str) -> Result<GetRecordResponse> {
+        self.find_record(collection, rkey)
+            .await?
+            .ok_or_else(|| request_error("getRecord response"))
+    }
+
+    pub fn record_uri(&self, collection: &str, rkey: &str) -> String {
+        format!("at://{}/{collection}/{rkey}", self.did)
+    }
+
+    /// Only the exact RecordNotFound protocol code means absence.
+    pub async fn find_record(
+        &self,
+        collection: &str,
+        rkey: &str,
+    ) -> Result<Option<GetRecordResponse>> {
         let nsid = Self::parse_nsid(collection)?;
 
         let rk = Rkey::new(rkey).map_err(|e| miette!("Invalid rkey: {e}"))?;
@@ -160,13 +175,24 @@ impl<H: HttpClient + Send + Sync + 'static> PdsClient<H> {
             .await
             .map_err(|_| request_error("getRecord"))?;
 
+        // XRPC protocol errors use 400. Other statuses retain SDK handling.
+        if response.status().as_u16() == 400
+            && serde_json::from_slice::<serde_json::Value>(response.buffer())
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+                .as_deref()
+                == Some("RecordNotFound")
+        {
+            return Ok(None);
+        }
+
         let output = response
             .into_output()
             .map_err(|_| request_error("getRecord response"))?;
 
         let value_json = serde_json::to_value(&output.value).unwrap_or(serde_json::Value::Null);
 
-        Ok(GetRecordResponse { value: value_json })
+        Ok(Some(GetRecordResponse { value: value_json }))
     }
 
     /// Update a record (put)

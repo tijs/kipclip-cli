@@ -84,6 +84,83 @@ pub async fn save_verified<H: jacquard::http_client::HttpClient + Send + Sync + 
     })
 }
 
+/// Complete a partial save without creating another bookmark or overwriting
+/// an existing annotation (including user notes or edits).
+pub async fn resume_verified<H: jacquard::http_client::HttpClient + Send + Sync + 'static>(
+    pds: &PdsClient<H>,
+    url: &str,
+    tags: &[String],
+    metadata: UrlMetadata,
+    rkey: &str,
+) -> Result<EnrichedBookmark> {
+    validate_http_url(url)?;
+    let record = pds.get_record(BOOKMARK_COLLECTION, rkey).await?;
+    let bookmark: BookmarkRecord = serde_json::from_value(record.value)
+        .map_err(|_| miette!("Interrupted bookmark readback was invalid."))?;
+    if bookmark.subject != url || tags.iter().any(|tag| !bookmark.tags.contains(tag)) {
+        return Err(miette!(
+            "Interrupted bookmark URL/tags no longer match; nothing was overwritten."
+        ));
+    }
+    let uri = pds.record_uri(BOOKMARK_COLLECTION, rkey);
+    let mut repaired = false;
+    let annotation = match pds.find_record(ANNOTATION_COLLECTION, rkey).await? {
+        Some(record) => record,
+        None => {
+            repaired = true;
+            let annotation = AnnotationRecord {
+                subject: uri.clone(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                note: None,
+                title: metadata.title.clone(),
+                description: metadata.description.clone(),
+                image: metadata.image.clone(),
+                favicon: metadata.favicon.clone(),
+            };
+            pds.create_record(ANNOTATION_COLLECTION, Some(rkey), &annotation)
+                .await?;
+            pds.get_record(ANNOTATION_COLLECTION, rkey).await?
+        }
+    };
+    let annotation: AnnotationRecord = serde_json::from_value(annotation.value)
+        .map_err(|_| miette!("Interrupted annotation readback was invalid."))?;
+    if annotation.subject != uri {
+        return Err(miette!(
+            "Interrupted annotation points at another bookmark; nothing was overwritten."
+        ));
+    }
+    if repaired
+        && (annotation.title != metadata.title
+            || annotation.description != metadata.description
+            || annotation.image != metadata.image
+            || annotation.favicon != metadata.favicon)
+    {
+        return Err(miette!(
+            "Repaired annotation did not match the save request."
+        ));
+    }
+    // Re-check bookmark after any missing-sidecar repair, before confirmation.
+    let final_record = pds.get_record(BOOKMARK_COLLECTION, rkey).await?;
+    let final_bookmark: BookmarkRecord = serde_json::from_value(final_record.value)
+        .map_err(|_| miette!("Interrupted bookmark readback was invalid."))?;
+    if final_bookmark.subject != url || tags.iter().any(|tag| !final_bookmark.tags.contains(tag)) {
+        return Err(miette!("Interrupted bookmark changed during verification."));
+    }
+    Ok(EnrichedBookmark {
+        uri,
+        cid: String::new(),
+        rkey: rkey.to_string(),
+        subject: final_bookmark.subject,
+        created_at: final_bookmark.created_at,
+        tags: final_bookmark.tags,
+        title: annotation.title,
+        description: annotation.description,
+        image: annotation.image,
+        favicon: annotation.favicon,
+        note: annotation.note,
+    })
+}
+
 pub async fn run(pds: &PdsClient, url: &str, tags: &[String]) -> Result<()> {
     validate_http_url(url)?;
 

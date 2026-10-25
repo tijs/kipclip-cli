@@ -29,6 +29,108 @@ const ACCESS_NEXT: &str = "fixture.access.rotated";
 const REFRESH_NEXT: &str = "fixture.refresh.rotated";
 
 #[tokio::test]
+async fn interrupted_save_repairs_only_missing_sidecar_and_preserves_existing_notes() {
+    use crate::kipclip::types::{ANNOTATION_COLLECTION, UrlMetadata};
+    for missing in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("whoami.json");
+        let http = MockHttp::default();
+        let info = login_fixture(&path, &http).await;
+        let client = pds(&info, &path, http.clone());
+        let uri = format!("at://{DID}/{BOOKMARK_COLLECTION}/fixturekey");
+        let annotation_uri = format!("at://{DID}/{ANNOTATION_COLLECTION}/fixturekey");
+        let cid = "bafyreiclbzdovdyoyzymb7t3getdeam3hgwqxszgth5ukj6o3tkoftthei";
+        let bookmark = json!({"uri":uri,"cid":cid,"value":{"subject":"https://article.test/", "createdAt":"2026-10-24T00:00:00Z", "tags":["toread"]}});
+        let annotation = json!({"uri":annotation_uri,"cid":cid,"value":{"subject":uri,"createdAt":"2026-10-24T00:00:00Z","title":if missing {"Cached title"} else {"User edited title"},"note":if missing {None} else {Some("Keep this note")}}});
+        http.reply(200, bookmark.clone());
+        if missing {
+            http.reply(400, json!({"error":"RecordNotFound","message":PRIVATE}));
+            http.reply(200, json!({"uri":annotation_uri,"cid":cid}));
+        }
+        http.reply(200, annotation);
+        http.reply(200, bookmark);
+        let metadata = UrlMetadata {
+            title: Some("Cached title".into()),
+            description: None,
+            image: None,
+            favicon: None,
+        };
+        let saved = crate::commands::add::resume_verified(
+            &client,
+            "https://article.test/",
+            &["toread".into()],
+            metadata,
+            "fixturekey",
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved.uri, uri);
+        if !missing {
+            assert_eq!(saved.note.as_deref(), Some("Keep this note"));
+        }
+        let requests = http.requests.lock().unwrap();
+        let creates: Vec<_> = requests
+            .iter()
+            .filter(|req| req.uri().path().ends_with("/com.atproto.repo.createRecord"))
+            .collect();
+        assert_eq!(creates.len(), usize::from(missing));
+        if missing {
+            let body: Value = serde_json::from_slice(creates[0].body()).unwrap();
+            assert_eq!(body["collection"], ANNOTATION_COLLECTION);
+            assert_eq!(body["rkey"], "fixturekey");
+        }
+    }
+}
+
+#[tokio::test]
+async fn interrupted_save_never_repairs_wrong_url_missing_tags_or_unavailable_sidecar() {
+    use crate::kipclip::types::UrlMetadata;
+    for mode in 0..4 {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("whoami.json");
+        let http = MockHttp::default();
+        let info = login_fixture(&path, &http).await;
+        let client = pds(&info, &path, http.clone());
+        let uri = format!("at://{DID}/{BOOKMARK_COLLECTION}/fixturekey");
+        let cid = "bafyreiclbzdovdyoyzymb7t3getdeam3hgwqxszgth5ukj6o3tkoftthei";
+        http.reply(200,json!({"uri":uri,"cid":cid,"value":{"subject":if mode==0 {"https://wrong.test/"} else {"https://article.test/"},"createdAt":"2026-10-24T00:00:00Z","tags":if mode==1 {json!([])} else {json!(["toread"])}}}));
+        if mode == 2 {
+            http.reply(
+                500,
+                json!({"error":"InternalServerError","message":PRIVATE}),
+            );
+        }
+        if mode == 3 {
+            http.reply(404, json!({"error":"RecordNotFound","message":PRIVATE}));
+        }
+        let metadata = UrlMetadata {
+            title: None,
+            description: None,
+            image: None,
+            favicon: None,
+        };
+        let error = crate::commands::add::resume_verified(
+            &client,
+            "https://article.test/",
+            &["toread".into()],
+            metadata,
+            "fixturekey",
+        )
+        .await
+        .unwrap_err();
+        assert_sanitized(&error);
+        let requests = http.requests.lock().unwrap();
+        assert_eq!(requests.len(), if mode >= 2 { 3 } else { 2 });
+        assert!(
+            requests
+                .iter()
+                .skip(1)
+                .all(|req| req.method() == http::Method::GET)
+        );
+    }
+}
+
+#[tokio::test]
 async fn cached_save_verifies_exact_records_without_scanning_or_fetching_pages() {
     use crate::kipclip::types::{ANNOTATION_COLLECTION, UrlMetadata};
     let root = tempfile::tempdir().unwrap();
